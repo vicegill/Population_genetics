@@ -1,0 +1,211 @@
+---
+title: "Plotting Pixy RU_FI"
+author: "Jaskaran S. Gill"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    fig_caption: yes
+    fig_height: 12
+    fig_width: 15
+    highlight: haddock
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+  word_document:
+    toc: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE, message=FALSE)
+```
+
+## Bash Script used to produce the output
+
+```{bash,eval=FALSE}
+#!/bin/bash
+#SBATCH --get-user-env
+#SBATCH --clusters=biohpc_gen
+#SBATCH --partition=biohpc_gen_normal
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=4763mb
+#SBATCH --time=1-12:00:00
+#SBATCH -J Pipeline_wgs_Pop-gen
+#SBATCH --error=%J.err
+
+source /dss/dsshome1/09/ra78pec/.bashrc
+source activate pixy
+
+VCF=$1 
+POP_FILE=$2
+OUTPUT=$3
+
+#It only accept vcf.gz file , so zip your vcf file using "gzip <vcf-file>"
+#Also index your vcf file using "tabix <vcf.gz file>" and keep it in the same folder as your vcf.gz file
+#We are using the maximum cores that is 80
+#--bypass_invariant_check make it works even if there is no invariant sites in vcf file
+
+
+pixy --stats fst \
+     --vcf $VCF \
+     --populations $POP_FILE \
+     --n_cores 80\
+     --bypass_invariant_check 'yes' \
+     --window_size 50000 \
+     --output_folder $OUTPUT \
+     --output_prefix pixy_results
+
+conda deactivate
+
+```
+
+### Clearing the Environment
+
+```{r}
+rm(list=ls())
+```
+
+### Loading the required Packages
+
+```{r}
+library(tidyr)
+library(dplyr)
+library(ggplot2)
+library(readr)
+```
+
+## Plotting the Required Package
+```{r}
+pixy_to_long <- function(pixy_files){
+
+  pixy_df <- list()
+
+  for(i in 1:length(pixy_files)){
+
+    stat_file_type <- gsub(".*_|.txt", "", pixy_files[i])
+
+    if(stat_file_type == "pi"){
+
+      df <- read_delim(pixy_files[i], delim = "\t")
+      df <- df %>%
+        gather(-pop, -window_pos_1, -window_pos_2, -chromosome,
+               key = "statistic", value = "value") %>%
+        rename(pop1 = pop) %>%
+        mutate(pop2 = NA)
+
+      pixy_df[[i]] <- df
+
+
+    } else{
+
+      df <- read_delim(pixy_files[i], delim = "\t")
+      df <- df %>%
+        gather(-pop1, -pop2, -window_pos_1, -window_pos_2, -chromosome,
+               key = "statistic", value = "value")
+      pixy_df[[i]] <- df
+
+    }
+
+  }
+
+  bind_rows(pixy_df) %>%
+    arrange(pop1, pop2, chromosome, window_pos_1, statistic)
+
+}
+
+```
+## Uploading the data
+```{r}
+pixy_folder <- "/home/gill/Project_2022/Temp_Folder/Pixy_Fst_dxy_pi_FI-RU/data/"
+pixy_files <- list.files(pixy_folder, full.names = TRUE)
+pixy_df <- pixy_to_long(pixy_files)
+```
+## Plotting
+```{r}
+# custom labeller for special characters in pi/dxy/fst
+pixy_labeller <- as_labeller(c(avg_pi = "pi",
+                             avg_dxy = "D[XY]",
+                             avg_wc_fst = "F[ST]"),
+                             default = label_parsed)
+
+
+
+# plotting summary statistics along a single chromosome
+chr <- c(1:37, "chr01A","chr01A_random1","chr01_random1","chr02_random1","chr02_random2","chr02_random3",
+"chr02_random4","chr03_random1","chr03_random2","chr03_random3","chr03_random4","chr03_random5","chr04A","chr04A_random1","chr04_random1","chr04_random2","chr04_random3","chr04_random4","chr05_random1","chr10_random1","chr11_random1","chr14_random1","chr21_random1","chr25_random1","chr25_random2","chr27_random1","chr27_random2","chr29_random1","chr33_random1")
+
+
+for(i in chr[c(-16,-30)]){ 
+k <- pixy_df %>%
+  filter(chromosome == i) %>%
+  filter(statistic %in% c("avg_pi", "avg_dxy", "avg_wc_fst")) %>%
+  mutate(chr_position = ((window_pos_1 + window_pos_2)/2)/1000000) %>%
+  ggplot(aes(x = chr_position, y = value, color = statistic))+
+  geom_line(size = 0.25)+
+  facet_grid(statistic ~ .,
+             scales = "free_y", switch = "x", space = "free_x",
+             labeller = labeller(statistic = pixy_labeller,
+                                 value = label_value))+
+  xlab(paste("chromosome number/name ", i))+
+  ylab("Statistic Value")+
+  theme_bw()+
+  theme(panel.spacing = unit(0.1, "cm"),
+        strip.background = element_blank(),
+        strip.placement = "outside",
+        legend.position = "none")+
+  scale_x_continuous(expand = c(0, 0))+
+  scale_y_continuous(expand = c(0, 0))+
+  scale_color_brewer(palette = "Set1")
+
+print(k)
+
+}
+
+
+```
+## Genome Wide code
+```{r}
+# create a custom labeller for special characters in pi/dxy/fst
+pixy_labeller <- as_labeller(c(avg_pi = "pi",
+                             avg_dxy = "D[XY]",
+                             avg_wc_fst = "F[ST]"),
+                             default = label_parsed)
+pixy_df <- mutate(pixy_df, mean.window= (window_pos_1+window_pos_2)/2)
+pixy_df <- group_by(pixy_df,chromosome) %>% mutate(normalized_window=mean.window/mean(mean.window))
+# plotting summary statistics across all chromosomes
+m <- pixy_df %>%
+  mutate(chrom_color_group = case_when(as.numeric(chromosome) %% 2 != 0 ~ "even",
+                                 chromosome == "X" ~ "even",
+                                 TRUE ~ "odd" )) %>%
+  filter(statistic %in% c("avg_pi", "avg_dxy", "avg_wc_fst")) %>%
+  mutate(chromosome = factor(chromosome, levels = c(1:37))) %>%
+  filter(!is.na(chromosome)) %>%
+  ggplot(aes(x = normalized_window, y = value, color = chrom_color_group))+
+  geom_point(size = 0.5, alpha = 0.5, stroke = 0)+
+  facet_grid(statistic ~ chromosome,
+             switch = "x", space = "free_x",
+             labeller = labeller(statistic = pixy_labeller,
+                                 value = label_value))+
+  xlab("Chromsome")+
+  ylab("Statistic Value")+
+  scale_color_manual(values = c("grey50", "black"))+
+  theme_classic()+
+  theme(strip.text.x = element_text(angle = 90,hjust = 1,size=5),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.spacing = unit(0.01, "cm"),
+        strip.background = element_blank(),
+        strip.placement = "outside",
+        legend.position ="none")+
+  scale_x_continuous(expand = c(0, 0)) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0,NA))+
+  coord_fixed(ratio = 50)
+pdf("RU-FI_WHOLE_GENOME.pdf")
+print(m)
+dev.off()
+
+
+```
+
+
