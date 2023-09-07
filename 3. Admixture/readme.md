@@ -1,3 +1,4 @@
+
 This Folder has the 4 files :-
 
 1. Additional needed Files :- which contains filemap and ind2pop file which are generally required to run the admixture.
